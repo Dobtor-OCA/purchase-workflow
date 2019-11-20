@@ -74,6 +74,20 @@ class PurchaseOrder(models.Model):
         self._purchase_request_confirm_message()
         return res
 
+    @api.multi
+    def unlink(self):
+        alloc_to_unlink = self.env['purchase.request.allocation']
+        for rec in self:
+            for alloc in rec.order_line.mapped(
+                    'purchase_request_lines').mapped(
+                    'purchase_request_allocation_ids').filtered(
+                    lambda alloc: alloc.purchase_line_id.order_id.id == rec.id
+            ):
+                alloc_to_unlink += alloc
+        res = super().unlink()
+        alloc_to_unlink.unlink()
+        return res
+
 
 class PurchaseOrderLine(models.Model):
     _inherit = "purchase.order.line"
@@ -88,7 +102,8 @@ class PurchaseOrderLine(models.Model):
     purchase_request_allocation_ids = fields.One2many(
         comodel_name='purchase.request.allocation',
         inverse_name='purchase_line_id',
-        string='Purchase Request Allocation')
+        string='Purchase Request Allocation',
+        copy=False,)
 
     @api.multi
     def action_openRequestLineTreeView(self):
@@ -191,10 +206,16 @@ class PurchaseOrderLine(models.Model):
 
     @api.multi
     def write(self, vals):
-        #  it is done here instead of method _update_received_qty
-        #  to make sure this work for services
-        prev_qty_received = self.qty_received
-        res = super(PurchaseOrderLine, self).write(vals)
+        #  As services do not generate stock move this tweak is required
+        #  to allocate them.
+        prev_qty_received = {}
         if vals.get('qty_received', False):
-            self.update_service_allocations(prev_qty_received)
+            service_lines = self.filtered(
+                lambda l: l.product_id.type == 'service')
+            for line in service_lines:
+                prev_qty_received[line.id] = line.qty_received
+        res = super(PurchaseOrderLine, self).write(vals)
+        if prev_qty_received:
+            for line in service_lines:
+                line.update_service_allocations(prev_qty_received[line.id])
         return res

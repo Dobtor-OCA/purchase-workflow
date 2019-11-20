@@ -132,3 +132,151 @@ class TestPurchaseRequestToRfq(common.TransactionCase):
         purchase.button_cancel()
         self.assertEqual(purchase_request_line1.qty_cancelled, 1.5)
         self.assertEqual(purchase_request_line1.pending_qty_to_receive, 1.5)
+
+    def test_purchase_request_allocation_min_qty(self):
+        vals = {
+            'picking_type_id': self.env.ref('stock.picking_type_in').id,
+            'requested_by': SUPERUSER_ID,
+        }
+        purchase_request1 = self.purchase_request.create(vals)
+        vals = {
+            'request_id': purchase_request1.id,
+            'product_id': self.product_product.id,
+            'product_uom_id': self.env.ref('uom.product_uom_unit').id,
+            'product_qty': 2.0,
+        }
+        purchase_request_line1 = self.purchase_request_line.create(vals)
+        # add a vendor
+        vendor1 = self.env.ref('base.res_partner_1')
+        self.env['product.supplierinfo'].create({
+            'name': vendor1.id,
+            'product_tmpl_id': self.product_product.product_tmpl_id.id,
+            'min_qty': 8,
+        })
+        vals = {
+            'supplier_id': self.env.ref('base.res_partner_1').id,
+        }
+        purchase_request1.button_approved()
+        wiz_id = self.wiz.with_context(
+            active_model="purchase.request.line",
+            active_ids=[purchase_request_line1.id,
+                        ]).create(vals)
+        wiz_id.make_purchase_order()
+        self.assertEqual(
+            purchase_request_line1.purchase_request_allocation_ids[0].
+            open_product_qty, 2.0)
+
+    def test_purchase_request_stock_allocation(self):
+        product = self.env.ref('product.product_product_6')
+        product.uom_po_id = self.env.ref('uom.product_uom_dozen')
+
+        vals = {
+            'picking_type_id': self.env.ref('stock.picking_type_in').id,
+            'requested_by': SUPERUSER_ID,
+        }
+        purchase_request = self.purchase_request.create(vals)
+        vals = {
+            'request_id': purchase_request.id,
+            'product_id': product.id,
+            'product_uom_id': self.env.ref('uom.product_uom_unit').id,
+            'product_qty': 12.0,
+        }
+        purchase_request_line1 = self.purchase_request_line.create(vals)
+        vals = {
+            'request_id': purchase_request.id,
+            'product_id': product.id,
+            'product_uom_id': self.env.ref('uom.product_uom_dozen').id,
+            'product_qty': 1,
+        }
+        purchase_request_line2 = self.purchase_request_line.create(vals)
+        vals = {
+            'supplier_id': self.env.ref('base.res_partner_1').id,
+        }
+        purchase_request.button_approved()
+        wiz_id = self.wiz.with_context(
+            active_model="purchase.request.line",
+            active_ids=[purchase_request_line1.id, purchase_request_line2.id,
+                        ]).create(vals)
+        # Create PO
+        wiz_id.make_purchase_order()
+        po_line = purchase_request_line1.purchase_lines[0]
+        self.assertEquals(po_line.product_qty, 2, 'Quantity should be 2')
+        self.assertEquals(po_line.product_uom,
+                          self.env.ref('uom.product_uom_dozen'),
+                          'The purchase UoM should be Dozen(s).')
+        self.assertEquals(purchase_request_line1.
+                          purchase_request_allocation_ids[0].
+                          requested_product_uom_qty, 12.0)
+        self.assertEquals(purchase_request_line2.
+                          purchase_request_allocation_ids[0].
+                          requested_product_uom_qty, 1.0)
+        purchase = po_line.order_id
+        # Cancel PO allocation requested quantity is set to 0.
+        purchase.button_cancel()
+        self.assertEquals(purchase_request_line1.
+                          purchase_request_allocation_ids[0].
+                          open_product_qty, 0)
+        self.assertEquals(purchase_request_line2.
+                          purchase_request_allocation_ids[0].
+                          open_product_qty, 0)
+        # Set to draft allocation requested quantity is set
+        purchase.button_draft()
+        self.assertEquals(purchase_request_line1.
+                          purchase_request_allocation_ids[0].
+                          open_product_qty, 12.0)
+        self.assertEquals(purchase_request_line2.
+                          purchase_request_allocation_ids[0].
+                          open_product_qty, 1.0)
+        purchase.button_confirm()
+        picking = purchase.picking_ids[0]
+        picking.move_line_ids[0].write({'qty_done': 24.0})
+        picking.button_validate()
+        self.assertEquals(
+            purchase_request_line1.purchase_request_allocation_ids[0].
+            allocated_product_qty,
+            purchase_request_line1.purchase_request_allocation_ids[0].
+            requested_product_uom_qty
+        )
+        self.assertEquals(
+            purchase_request_line2.purchase_request_allocation_ids[0].
+            allocated_product_qty,
+            purchase_request_line2.purchase_request_allocation_ids[0].
+            requested_product_uom_qty
+        )
+
+    def test_purchase_request_stock_allocation_unlink(self):
+        product = self.env.ref('product.product_product_6')
+        product.uom_po_id = self.env.ref('uom.product_uom_dozen')
+
+        vals = {
+            'picking_type_id': self.env.ref('stock.picking_type_in').id,
+            'requested_by': SUPERUSER_ID,
+        }
+        purchase_request = self.purchase_request.create(vals)
+        vals = {
+            'request_id': purchase_request.id,
+            'product_id': product.id,
+            'product_uom_id': self.env.ref('uom.product_uom_unit').id,
+            'product_qty': 12.0,
+        }
+        purchase_request_line1 = self.purchase_request_line.create(vals)
+        vals = {
+            'supplier_id': self.env.ref('base.res_partner_1').id,
+        }
+        purchase_request.button_approved()
+        wiz_id = self.wiz.with_context(
+            active_model="purchase.request.line",
+            active_ids=[purchase_request_line1.id, ]).create(vals)
+        # Create PO
+        wiz_id.make_purchase_order()
+        po_line = purchase_request_line1.purchase_lines[0]
+        self.assertEquals(purchase_request_line1.
+                          purchase_request_allocation_ids[0].
+                          requested_product_uom_qty, 12.0)
+        purchase = po_line.order_id
+        purchase.button_cancel()
+        # Delete PO: allocation and Purchase Order Lines are unlinked from PRL
+        purchase.unlink()
+        self.assertEquals(len(purchase_request_line1.purchase_lines), 0)
+        self.assertEquals(
+            len(purchase_request_line1.purchase_request_allocation_ids), 0)
